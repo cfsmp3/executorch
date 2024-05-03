@@ -875,7 +875,8 @@ class EdgeProgramManager:
         )
 
     def to_executorch(
-        self, config: Optional[ExecutorchBackendConfig] = None
+        self,
+        config: Optional[ExecutorchBackendConfig] = None,
     ) -> "ExecutorchProgramManager":
         """
         Transforms the program to the ExecuTorch backend.
@@ -888,10 +889,17 @@ class EdgeProgramManager:
             ExecutorchProgramManager: A manager representing the state of the EdgeProgramManager
             after it has been transformed to the ExecuTorch backend.
         """
-        config = config if config else ExecutorchBackendConfig()
+        config_input = config if config else ExecutorchBackendConfig()
+        if not isinstance(config, dict):
+            config_input = {"forward": config}
+        assert isinstance(
+            config_input, dict
+        ), f"Expected config to be a dictionary but received {type(config_input)}"
 
         execution_programs: Dict[str, ExportedProgram] = {}
         for name, program in self._edge_programs.items():
+            config = config_input.get(name, config_input.get("forward"))
+            assert config is not None, f"No config found for {name}"
             program = unsafe_remove_auto_functionalized_pass(program)
             gm, new_signature = insert_write_back_for_buffers_pass(program)
             new_gm = program.graph_module
@@ -912,13 +920,19 @@ class EdgeProgramManager:
                     # TODO(who?)
                     p.update_placeholder_tensor_specs(program, new_gm)
 
+            if isinstance(config.memory_planning_pass, dict):
+                memory_planning_pass = config.memory_planning_pass.get(
+                    name, ExecutorchBackendConfig().memory_planning_pass
+                )
+            else:
+                memory_planning_pass = config.memory_planning_pass
             # TODO(jakeszwe): Follow up with compiler on if the deepcopy is necessary and if so how to make it work
-            if hasattr(config.memory_planning_pass, "run"):
-                new_gm_res = config.memory_planning_pass.run(  # pyre-ignore[16]
+            if hasattr(memory_planning_pass, "run"):
+                new_gm_res = memory_planning_pass.run(  # pyre-ignore[16]
                     new_gm, new_signature
                 )
             else:
-                new_gm_res = config.memory_planning_pass(new_gm)  # pyre-ignore[19]
+                new_gm_res = memory_planning_pass(new_gm)  # pyre-ignore[29]
             assert new_gm_res is not None
             new_gm = new_gm_res.graph_module
 
